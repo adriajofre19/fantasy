@@ -1,0 +1,180 @@
+---
+import LayoutWithNavbar from "../components/LayoutWithNavbar.astro";
+import { supabase } from "../lib/supabase";
+import { getOrCreateUserTeam } from "../lib/fantasy";
+
+const accessToken = Astro.cookies.get("sb-access-token");
+const refreshToken = Astro.cookies.get("sb-refresh-token");
+
+if (!accessToken || !refreshToken) {
+    return Astro.redirect("/signin");
+}
+
+let session;
+try {
+    session = await supabase.auth.setSession({
+        refresh_token: refreshToken.value,
+        access_token: accessToken.value,
+    });
+    if (session.error) {
+        return Astro.redirect("/signin");
+    }
+} catch (error) {
+    return Astro.redirect("/signin");
+}
+
+const userId = session.data.user?.id;
+if (!userId) {
+    return Astro.redirect("/signin");
+}
+
+// Obtener equipo del usuario para mostrar su posición
+const userTeam = await getOrCreateUserTeam(userId);
+const userTeamId = userTeam?.id || null;
+---
+
+<LayoutWithNavbar title="Clasificación">
+    <div class="container mx-auto px-4 py-8 min-h-screen">
+        <div class="mb-8">
+            <h1 class="text-4xl font-bold mb-2 text-foreground">Clasificación</h1>
+            <p class="text-muted-foreground text-lg">Puntos acumulados según fichajes de jugadores</p>
+        </div>
+
+        <div id="ranking-container" class="bg-muted/30 rounded-lg p-6">
+            <div class="flex items-center justify-center py-12">
+                <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+                <span class="ml-4 text-muted-foreground">Cargando clasificación...</span>
+            </div>
+        </div>
+    </div>
+
+    <script define:vars={{ userId, userTeamId }}>
+        async function loadRanking() {
+            try {
+                const response = await fetch('/api/fantasy/ranking');
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Error al cargar la clasificación');
+                }
+                
+                const rankings = data.rankings || [];
+                const totalUsers = data.totalUsers || rankings.length;
+                const container = document.getElementById('ranking-container');
+                
+                if (rankings.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center py-12">
+                            <p class="text-muted-foreground text-lg">No hay usuarios en la clasificación aún.</p>
+                            <p class="text-muted-foreground text-sm mt-2">Los puntos se calcularán cuando los jugadores jueguen partidos después de ser fichados.</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                // Encontrar la posición del usuario
+                const userPosition = rankings.findIndex(r => r.userId === userId) + 1;
+                
+                let html = `
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-2xl font-semibold text-foreground">Tabla de Clasificación</h2>
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm text-muted-foreground bg-muted/50 px-3 py-1 rounded-md">
+                                    ${totalUsers} ${totalUsers === 1 ? 'usuario' : 'usuarios'} registrados
+                                </span>
+                            </div>
+                        </div>
+                        <p class="text-sm text-muted-foreground mb-4">
+                            Los puntos se calculan desde la fecha en que fichaste a cada jugador. 
+                            Solo cuentan los partidos que ocurrieron después del fichaje.
+                        </p>
+                        ${userPosition > 0 ? `
+                            <div class="bg-primary/10 border border-primary/20 rounded-lg p-4 mb-4">
+                                <p class="text-sm text-muted-foreground">Tu posición</p>
+                                <p class="text-2xl font-bold text-primary">#${userPosition}</p>
+                                ${rankings.find(r => r.userId === userId)?.totalPoints !== undefined ? `
+                                    <p class="text-sm text-muted-foreground mt-2">
+                                        Tus puntos: ${Math.round(rankings.find(r => r.userId === userId)?.totalPoints || 0).toLocaleString('es-ES')}
+                                    </p>
+                                ` : ''}
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full border-collapse">
+                            <thead>
+                                <tr class="border-b border-muted bg-muted/30">
+                                    <th class="text-left py-3 px-4 font-semibold text-foreground">Pos.</th>
+                                    <th class="text-left py-3 px-4 font-semibold text-foreground">Equipo</th>
+                                    <th class="text-right py-3 px-4 font-semibold text-foreground">Puntos Totales</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+                
+                rankings.forEach((ranking, index) => {
+                    const position = index + 1;
+                    const isCurrentUser = ranking.userId === userId;
+                    const rowClass = isCurrentUser 
+                        ? 'bg-primary/10 border-l-4 border-primary' 
+                        : 'hover:bg-muted/50';
+                    
+                    // Formatear puntos - mostrar 0 si no tiene puntos
+                    const points = Math.round(ranking.totalPoints || 0);
+                    const pointsDisplay = points.toLocaleString('es-ES');
+                    
+                    html += `
+                        <tr class="${rowClass} border-b border-muted/50">
+                            <td class="py-4 px-4">
+                                <span class="text-lg font-bold ${position <= 3 ? 'text-primary' : 'text-foreground'}">
+                                    ${position === 1 ? '🥇' : position === 2 ? '🥈' : position === 3 ? '🥉' : position}
+                                </span>
+                            </td>
+                            <td class="py-4 px-4">
+                                <span class="font-medium text-foreground ${isCurrentUser ? 'text-primary font-bold' : ''}">
+                                    ${ranking.teamName || 'Sin nombre'}${isCurrentUser ? ' (Tú)' : ''}
+                                </span>
+                            </td>
+                            <td class="py-4 px-4 text-right">
+                                <span class="text-lg font-bold text-foreground ${points === 0 ? 'text-muted-foreground' : ''}">
+                                    ${pointsDisplay}
+                                </span>
+                            </td>
+                        </tr>
+                    `;
+                });
+                
+                html += `
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Error cargando clasificación:', error);
+                const container = document.getElementById('ranking-container');
+                container.innerHTML = `
+                    <div class="text-center py-12">
+                        <p class="text-red-500 text-lg mb-2">Error al cargar la clasificación</p>
+                        <p class="text-muted-foreground">${error.message}</p>
+                        <button 
+                            onclick="loadRanking()" 
+                            class="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+                        >
+                            Reintentar
+                        </button>
+                    </div>
+                `;
+            }
+        }
+        
+        // Cargar la clasificación al cargar la página
+        loadRanking();
+        
+        // Recargar cada 30 segundos para mantener los datos actualizados
+        setInterval(loadRanking, 30000);
+    </script>
+</LayoutWithNavbar>
+

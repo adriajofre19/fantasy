@@ -1,0 +1,52 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Navbar from "../components/Navbar";
+import { supabase } from "../lib/supabase";
+import { getOrCreateUserTeam, getTeamBudget } from "../lib/fantasy";
+
+interface Props {
+    title?: string;
+}
+
+const { title = "Fantasy NBA" } = Astro.props;
+
+// Verificar autenticación
+const accessToken = Astro.cookies.get("sb-access-token");
+const refreshToken = Astro.cookies.get("sb-refresh-token");
+
+let userEmail = "";
+let budget = 0;
+
+if (accessToken && refreshToken) {
+    try {
+        const session = await supabase.auth.setSession({
+            refresh_token: refreshToken.value,
+            access_token: accessToken.value,
+        });
+        
+        if (!session.error && session.data.user) {
+            userEmail = session.data.user.email || "";
+            
+            // Obtener presupuesto del equipo
+            const userTeam = await getOrCreateUserTeam(session.data.user.id);
+            if (userTeam) {
+                budget = await getTeamBudget(userTeam.id);
+            }
+        }
+    } catch (error) {
+        console.error("Error obteniendo datos del usuario:", error);
+    }
+}
+---
+
+<Layout title={title} userEmail={userEmail} budget={budget}>
+    {userEmail && (
+        <Navbar 
+            client:load
+            userEmail={userEmail}
+            initialBudget={budget}
+        />
+    )}
+    <slot />
+</Layout>
+

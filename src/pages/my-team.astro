@@ -1,0 +1,77 @@
+---
+import LayoutWithNavbar from "../components/LayoutWithNavbar.astro";
+import { supabase } from "../lib/supabase";
+import { getOrCreateUserTeam, getTeamPlayers, getTeamBudget } from "../lib/fantasy";
+import TeamManager from "../components/TeamManager";
+
+const accessToken = Astro.cookies.get("sb-access-token");
+const refreshToken = Astro.cookies.get("sb-refresh-token");
+
+if (!accessToken || !refreshToken) {
+    return Astro.redirect("/signin");
+}
+
+let session;
+try {
+    session = await supabase.auth.setSession({
+        refresh_token: refreshToken.value,
+        access_token: accessToken.value,
+    });
+    if (session.error) {
+        return Astro.redirect("/signin");
+    }
+} catch (error) {
+    return Astro.redirect("/signin");
+}
+
+const userId = session.data.user?.id;
+if (!userId) {
+    return Astro.redirect("/signin");
+}
+
+// Obtener o crear equipo del usuario
+const userTeam = await getOrCreateUserTeam(userId);
+if (!userTeam) {
+    return Astro.redirect("/signin");
+}
+
+// Obtener jugadores del equipo
+const players = await getTeamPlayers(userTeam.id);
+const budget = await getTeamBudget(userTeam.id);
+
+const starters = players.filter(p => p.is_starter);
+const bench = players.filter(p => !p.is_starter);
+---
+
+<LayoutWithNavbar title="Mi Equipo">
+    <div class="container mx-auto px-4 py-8 min-h-screen">
+        <div class="mb-8">
+            <h1 class="text-4xl font-bold mb-2 text-foreground">Mi Equipo</h1>
+            <p class="text-muted-foreground text-lg">{userTeam.team_name}</p>
+            <div class="mt-4 flex gap-4">
+                <div class="bg-muted/50 rounded-lg px-4 py-2">
+                    <p class="text-sm text-muted-foreground">Presupuesto</p>
+                    <p class="text-2xl font-bold text-foreground">${budget.toLocaleString()}</p>
+                </div>
+                <div class="bg-muted/50 rounded-lg px-4 py-2">
+                    <p class="text-sm text-muted-foreground">Jugadores</p>
+                    <p class="text-2xl font-bold text-foreground">{players.length}/9</p>
+                </div>
+            </div>
+        </div>
+
+        <TeamManager 
+            client:load
+            starters={starters}
+            bench={bench}
+        />
+
+        <div class="mt-8">
+            <a href="/market" class="inline-block px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
+                Ir al Mercado
+            </a>
+        </div>
+    </div>
+
+</LayoutWithNavbar>
+
