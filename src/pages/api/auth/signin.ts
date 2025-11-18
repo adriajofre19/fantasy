@@ -43,10 +43,20 @@ export const POST: APIRoute = async ({ request, cookies, redirect, url }) => {
         // Asegurarse de que la URL sea absoluta y completa
         const callbackUrl = `${origin}/api/auth/callback`;
 
-        // Log para debugging
-        console.log("OAuth callback URL:", callbackUrl);
-        console.log("Origin detectado:", origin);
-        console.log("URL actual:", url.href);
+        // Log para debugging (visible en Vercel logs)
+        const debugInfo = {
+            callbackUrl,
+            origin,
+            currentUrl: url.href,
+            siteUrl: import.meta.env.SITE_URL,
+            publicSiteUrl: import.meta.env.PUBLIC_SITE_URL,
+            site: import.meta.env.SITE,
+            vercelUrl: import.meta.env.VERCEL_URL,
+            forwardedHost: request.headers.get("x-forwarded-host"),
+            forwardedProto: request.headers.get("x-forwarded-proto"),
+        };
+
+        console.log("🔐 OAuth Sign In Debug Info:", JSON.stringify(debugInfo, null, 2));
 
         const { data, error } = await supabase.auth.signInWithOAuth({
             provider: provider as Provider,
@@ -56,9 +66,20 @@ export const POST: APIRoute = async ({ request, cookies, redirect, url }) => {
         });
 
         if (error) {
-            return new Response(error.message, { status: 500 });
+            console.error("❌ OAuth Error:", error);
+            return new Response(
+                JSON.stringify({
+                    error: error.message,
+                    debug: import.meta.env.DEV ? debugInfo : undefined
+                }),
+                {
+                    status: 500,
+                    headers: { "Content-Type": "application/json" }
+                }
+            );
         }
 
+        console.log("✅ OAuth redirect URL:", data.url);
         return redirect(data.url);
     }
 
