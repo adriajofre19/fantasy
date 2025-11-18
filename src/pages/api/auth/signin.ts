@@ -12,7 +12,29 @@ export const POST: APIRoute = async ({ request, cookies, redirect, url }) => {
 
     if (provider && validProviders.includes(provider)) {
         // Detectar l'URL base (producció o desenvolupament)
-        const origin = url.origin;
+        // Prioridad: SITE_URL > VERCEL_URL > headers HTTP > url.origin
+        let origin: string;
+
+        const siteUrl = import.meta.env.SITE_URL || import.meta.env.PUBLIC_SITE_URL;
+        const vercelUrl = import.meta.env.VERCEL_URL;
+
+        if (siteUrl) {
+            origin = siteUrl;
+        } else if (vercelUrl) {
+            // Vercel proporciona VERCEL_URL automáticamente
+            origin = `https://${vercelUrl}`;
+        } else {
+            // Intentar obtener la URL real desde headers (útil con proxies/load balancers)
+            const forwardedHost = request.headers.get("x-forwarded-host");
+            const forwardedProto = request.headers.get("x-forwarded-proto") || "https";
+
+            if (forwardedHost) {
+                origin = `${forwardedProto}://${forwardedHost}`;
+            } else {
+                origin = url.origin;
+            }
+        }
+
         const callbackUrl = `${origin}/api/auth/callback`;
 
         const { data, error } = await supabase.auth.signInWithOAuth({
