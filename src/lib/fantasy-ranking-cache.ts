@@ -42,6 +42,12 @@ export async function saveRankingsToCache(rankings: TeamRanking[]): Promise<bool
             });
 
         if (error) {
+            // Si la tabla no existe, solo loguear el error pero no fallar
+            if (error.code === '42P01' || error.message?.includes('does not exist')) {
+                console.warn('⚠️ Tabla team_rankings_cache no existe. Ejecuta la migración 004_team_rankings_cache.sql');
+                console.warn('   Los rankings se calcularán cada vez hasta que la tabla exista.');
+                return false;
+            }
             console.error('❌ Error guardando rankings en caché:', error);
             return false;
         }
@@ -84,6 +90,11 @@ export async function getRankingsFromCache(maxAgeMinutes: number = 30): Promise<
             .order('total_points', { ascending: false });
 
         if (error) {
+            // Si la tabla no existe, retornar null para que se calcule
+            if (error.code === '42P01' || error.message?.includes('does not exist')) {
+                console.log('📭 Tabla team_rankings_cache no existe aún, se calculará');
+                return null;
+            }
             console.error('❌ Error obteniendo rankings desde caché:', error);
             return null;
         }
@@ -137,7 +148,13 @@ export async function getRankingsWithCache(maxAgeMinutes: number = 30): Promise<
     // Intentar obtener desde caché
     const cachedRankings = await getRankingsFromCache(maxAgeMinutes);
     
-    if (cachedRankings) {
+    if (cachedRankings && cachedRankings.length > 0) {
+        // Verificar si todos tienen 0 puntos (posible error en el cálculo anterior)
+        const totalPoints = cachedRankings.reduce((sum, r) => sum + r.totalPoints, 0);
+        if (totalPoints === 0) {
+            console.log('⚠️ Caché tiene 0 puntos totales, recalculando...');
+            return await calculateAndCacheRankings();
+        }
         return cachedRankings;
     }
     

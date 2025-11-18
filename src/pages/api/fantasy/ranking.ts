@@ -63,14 +63,31 @@ export const GET: APIRoute = async ({ request, url }) => {
         const forceRecalculate = url.searchParams.get('force') === 'true';
         
         let rankings;
-        if (forceRecalculate) {
-            console.log('🔄 Forzando recálculo de rankings...');
+        try {
+            if (forceRecalculate) {
+                console.log('🔄 Forzando recálculo de rankings...');
+                rankings = await calculateAndCacheRankings();
+            } else {
+                rankings = await getRankingsWithCache(30); // Caché válido por 30 minutos
+            }
+            
+            if (!rankings || rankings.length === 0) {
+                console.warn('⚠️ No se obtuvieron rankings, intentando calcular...');
+                rankings = await calculateAndCacheRankings();
+            }
+            
+            console.log(`✅ Clasificación obtenida: ${rankings.length} equipos`);
+            
+            // Verificar si hay puntos
+            const totalPoints = rankings.reduce((sum, r) => sum + r.totalPoints, 0);
+            if (totalPoints === 0 && rankings.length > 0) {
+                console.warn('⚠️ Todos los rankings tienen 0 puntos. Esto puede indicar un problema con los game logs.');
+            }
+        } catch (error) {
+            console.error('❌ Error obteniendo rankings:', error);
+            // Intentar calcular directamente sin caché como fallback
             rankings = await calculateAndCacheRankings();
-        } else {
-            rankings = await getRankingsWithCache(30); // Caché válido por 30 minutos
         }
-        
-        console.log(`✅ Clasificación obtenida: ${rankings.length} equipos`);
         
         // Crear un mapa de rankings por userId para facilitar la búsqueda
         const rankingsMap = new Map<string, typeof rankings[0]>();
