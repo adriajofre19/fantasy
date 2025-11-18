@@ -33,76 +33,92 @@ export interface WeeklyPoints {
  */
 export async function getPlayerAllGameLogs(
     playerId: number,
-    season: string = '2025-26'
+    season: string = '2024-25' // Cambiar a temporada actual que tiene datos
 ): Promise<PlayerGameLog[]> {
-    // Clave de caché única por jugador y temporada
-    const cacheKey = `player_gamelogs_${playerId}_${season}`;
-    
-    // Intentar obtener del caché primero (TTL de 1 hora)
-    const cached = cache.get<PlayerGameLog[]>(cacheKey);
-    if (cached) {
-        console.log(`📋 Game logs desde caché para jugador ${playerId}: ${cached.length} partidos`);
-        return cached;
-    }
+    // Intentar múltiples temporadas en orden de prioridad
+    const seasonsToTry = [
+        '2024-25', // Temporada actual (probablemente tiene datos)
+        '2025-26', // Temporada futura (por si acaso)
+        '2023-24', // Temporada pasada (fallback)
+    ];
 
-    try {
-        const nbaHeaders = {
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.nba.com/',
-            'Origin': 'https://www.nba.com',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        };
-
-        const gameLogsUrl = `https://stats.nba.com/stats/playergamelog?DateFrom=&DateTo=&LeagueID=00&PlayerID=${playerId}&Season=${season}&SeasonType=Regular%20Season`;
+    for (const seasonToTry of seasonsToTry) {
+        // Clave de caché única por jugador y temporada
+        const cacheKey = `player_gamelogs_${playerId}_${seasonToTry}`;
         
-        const response = await fetch(gameLogsUrl, {
-            headers: nbaHeaders,
-        });
-
-        if (!response.ok) {
-            console.error(`Error obteniendo game logs para jugador ${playerId}: ${response.status}`);
-            return [];
+        // Intentar obtener del caché primero (TTL de 1 hora)
+        const cached = cache.get<PlayerGameLog[]>(cacheKey);
+        if (cached && cached.length > 0) {
+            console.log(`📋 Game logs desde caché para jugador ${playerId} (${seasonToTry}): ${cached.length} partidos`);
+            return cached;
         }
 
-        const data = await response.json();
+        try {
+            const nbaHeaders = {
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.nba.com/',
+                'Origin': 'https://www.nba.com',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            };
 
-        if (!data.resultSets || data.resultSets.length === 0) {
-            return [];
+            const gameLogsUrl = `https://stats.nba.com/stats/playergamelog?DateFrom=&DateTo=&LeagueID=00&PlayerID=${playerId}&Season=${seasonToTry}&SeasonType=Regular%20Season`;
+            
+            const response = await fetch(gameLogsUrl, {
+                headers: nbaHeaders,
+            });
+
+            if (!response.ok) {
+                console.warn(`⚠️ Error obteniendo game logs para jugador ${playerId} (${seasonToTry}): ${response.status}`);
+                continue; // Intentar siguiente temporada
+            }
+
+            const data = await response.json();
+
+            if (!data.resultSets || data.resultSets.length === 0) {
+                console.warn(`⚠️ No hay resultSets para jugador ${playerId} (${seasonToTry})`);
+                continue; // Intentar siguiente temporada
+            }
+
+            const gameLogs = data.resultSets[0];
+            const headers = gameLogs.headers || [];
+            const rows = gameLogs.rowSet || [];
+
+            const gameDateIdx = headers.indexOf('GAME_DATE');
+            const ptsIdx = headers.indexOf('PTS');
+
+            if (gameDateIdx === -1 || ptsIdx === -1) {
+                console.warn(`⚠️ Headers no encontrados para jugador ${playerId} (${seasonToTry})`);
+                continue; // Intentar siguiente temporada
+            }
+
+            const games = rows.map((row: any[]) => ({
+                date: row[gameDateIdx],
+                points: parseInt(row[ptsIdx]) || 0,
+            })).sort((a, b) => {
+                // Ordenar por fecha ascendente (más antiguo primero)
+                return new Date(a.date).getTime() - new Date(b.date).getTime();
+            });
+
+            // Si encontramos partidos, guardar en caché y retornar
+            if (games.length > 0) {
+                // Guardar en caché (TTL de 1 hora = 3600000 ms)
+                cache.set(cacheKey, games, 3600000);
+                console.log(`✅ Game logs obtenidos para jugador ${playerId} (${seasonToTry}): ${games.length} partidos`);
+                return games;
+            } else {
+                console.warn(`⚠️ No se encontraron partidos para jugador ${playerId} (${seasonToTry})`);
+                // Continuar con siguiente temporada
+            }
+        } catch (error) {
+            console.warn(`⚠️ Error obteniendo game logs para jugador ${playerId} (${seasonToTry}):`, error);
+            continue; // Intentar siguiente temporada
         }
-
-        const gameLogs = data.resultSets[0];
-        const headers = gameLogs.headers || [];
-        const rows = gameLogs.rowSet || [];
-
-        const gameDateIdx = headers.indexOf('GAME_DATE');
-        const ptsIdx = headers.indexOf('PTS');
-
-        if (gameDateIdx === -1 || ptsIdx === -1) {
-            return [];
-        }
-
-        const games = rows.map((row: any[]) => ({
-            date: row[gameDateIdx],
-            points: parseInt(row[ptsIdx]) || 0,
-        })).sort((a, b) => {
-            // Ordenar por fecha ascendente (más antiguo primero)
-            return new Date(a.date).getTime() - new Date(b.date).getTime();
-        });
-
-        // Guardar en caché (TTL de 1 hora = 3600000 ms)
-        cache.set(cacheKey, games, 3600000);
-
-        // Log para debugging - mostrar formato de fecha recibido
-        if (games.length > 0) {
-            console.log(`📋 Game logs obtenidos para jugador ${playerId}: ${games.length} partidos`);
-        }
-
-        return games;
-    } catch (error) {
-        console.error(`Error obteniendo game logs para jugador ${playerId}:`, error);
-        return [];
     }
+
+    // Si ninguna temporada funcionó, retornar array vacío
+    console.warn(`❌ No se encontraron game logs para jugador ${playerId} en ninguna temporada`);
+    return [];
 }
 
 /**

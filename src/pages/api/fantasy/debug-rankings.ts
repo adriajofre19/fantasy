@@ -39,9 +39,14 @@ export const GET: APIRoute = async () => {
 
         // Obtener game logs de ejemplo (primer jugador)
         let gameLogsExample: any = null;
+        let gameLogsError: string | undefined;
         if (players && players.length > 0) {
             const firstPlayerId = players[0].player_id;
-            gameLogsExample = await getPlayerAllGameLogs(firstPlayerId);
+            try {
+                gameLogsExample = await getPlayerAllGameLogs(firstPlayerId);
+            } catch (error) {
+                gameLogsError = error instanceof Error ? error.message : String(error);
+            }
         }
 
         return new Response(
@@ -67,6 +72,7 @@ export const GET: APIRoute = async () => {
                         playerName: players?.[0]?.player_name,
                         gameLogsCount: gameLogsExample?.length || 0,
                         sampleGameLogs: gameLogsExample?.slice(0, 5) || [],
+                        error: gameLogsError,
                     },
                 },
             }),
