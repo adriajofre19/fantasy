@@ -4,6 +4,7 @@
  */
 
 import { supabase } from './supabase';
+import { cache } from './cache';
 
 export interface PlayerGameLog {
     date: string;
@@ -28,11 +29,22 @@ export interface WeeklyPoints {
 
 /**
  * Obtiene todos los game logs de un jugador desde la API de la NBA
+ * Usa caché para evitar llamadas repetidas a la API
  */
 export async function getPlayerAllGameLogs(
     playerId: number,
     season: string = '2025-26'
 ): Promise<PlayerGameLog[]> {
+    // Clave de caché única por jugador y temporada
+    const cacheKey = `player_gamelogs_${playerId}_${season}`;
+    
+    // Intentar obtener del caché primero (TTL de 1 hora)
+    const cached = cache.get<PlayerGameLog[]>(cacheKey);
+    if (cached) {
+        console.log(`📋 Game logs desde caché para jugador ${playerId}: ${cached.length} partidos`);
+        return cached;
+    }
+
     try {
         const nbaHeaders = {
             'Accept': 'application/json, text/plain, */*',
@@ -78,11 +90,12 @@ export async function getPlayerAllGameLogs(
             return new Date(a.date).getTime() - new Date(b.date).getTime();
         });
 
+        // Guardar en caché (TTL de 1 hora = 3600000 ms)
+        cache.set(cacheKey, games, 3600000);
+
         // Log para debugging - mostrar formato de fecha recibido
         if (games.length > 0) {
             console.log(`📋 Game logs obtenidos para jugador ${playerId}: ${games.length} partidos`);
-            console.log(`   - Formato de fecha del primer partido: "${games[0].date}"`);
-            console.log(`   - Formato de fecha del último partido: "${games[games.length - 1].date}"`);
         }
 
         return games;
@@ -444,38 +457,12 @@ export function calculateWeeklyPoints(
         return isInRange;
     });
     
-    // Log detallado para debugging
-    if (gameLogs.length > 0) {
+    // Log solo si no hay partidos filtrados (para debugging de problemas)
+    if (gameLogs.length > 0 && filteredGames.length === 0) {
         const firstGame = normalizeDate(gameLogs[0].date);
         const lastGame = normalizeDate(gameLogs[gameLogs.length - 1].date);
-        
-        console.log(`📅 Filtrado de partidos:`);
-        console.log(`   - Fecha compra: ${normalizedPurchaseDate.toISOString().split('T')[0]}`);
-        console.log(`   - Fecha venta: ${normalizedSaleDate ? normalizedSaleDate.toISOString().split('T')[0] : 'N/A'}`);
-        console.log(`   - Primer partido disponible: ${firstGame.toISOString().split('T')[0]}`);
-        console.log(`   - Último partido disponible: ${lastGame.toISOString().split('T')[0]}`);
-        console.log(`   - Total partidos disponibles: ${gameLogs.length}`);
-        console.log(`   - Partidos filtrados: ${filteredGames.length}`);
-        
-        if (filteredGames.length > 0) {
-            const totalPoints = filteredGames.reduce((sum, game) => sum + game.points, 0);
-            console.log(`   ✅ Puntos totales de partidos filtrados: ${totalPoints}`);
-        } else {
-            console.warn(`   ⚠️ No se filtraron partidos. Verificando razón...`);
-            
-            // Verificar si hay partidos después de la fecha de compra
-            const gamesAfterPurchase = gameLogs.filter(game => {
-                const gameDate = normalizeDate(game.date);
-                return gameDate >= normalizedPurchaseDate;
-            });
-            
-            if (gamesAfterPurchase.length === 0) {
-                console.warn(`   ⚠️ No hay partidos después de la fecha de compra (${normalizedPurchaseDate.toISOString().split('T')[0]})`);
-                console.warn(`   ℹ️ El último partido disponible es ${lastGame.toISOString().split('T')[0]}`);
-            } else {
-                console.warn(`   ⚠️ Hay ${gamesAfterPurchase.length} partidos después de la compra, pero fueron filtrados por la fecha de venta`);
-            }
-        }
+        console.warn(`⚠️ No se filtraron partidos para período ${normalizedPurchaseDate.toISOString().split('T')[0]} - ${normalizedSaleDate ? normalizedSaleDate.toISOString().split('T')[0] : 'actualidad'}`);
+        console.warn(`   Partidos disponibles: ${firstGame.toISOString().split('T')[0]} a ${lastGame.toISOString().split('T')[0]}`);
     }
 
     // Agrupar por semana
@@ -567,18 +554,31 @@ export async function calculateRankings(): Promise<TeamRanking[]> {
         console.log(`🎮 Jugadores únicos a procesar: ${playerIds.length}`);
         
         // Obtener game logs para todos los jugadores únicos
+        // Procesar en lotes para evitar rate limiting y mejorar rendimiento
         const playerGameLogsMap = new Map<number, PlayerGameLog[]>();
-        await Promise.all(
-            playerIds.map(async (playerId) => {
-                const gameLogs = await getPlayerAllGameLogs(playerId);
-                playerGameLogsMap.set(playerId, gameLogs);
-                if (gameLogs.length > 0) {
-                    console.log(`  ✓ Jugador ${playerId}: ${gameLogs.length} partidos encontrados`);
-                } else {
-                    console.warn(`  ⚠ Jugador ${playerId}: No se encontraron partidos`);
-                }
-            })
-        );
+        const batchSize = 5; // Procesar 5 jugadores a la vez
+        
+        for (let i = 0; i < playerIds.length; i += batchSize) {
+            const batch = playerIds.slice(i, i + batchSize);
+            console.log(`📦 Procesando lote ${Math.floor(i / batchSize) + 1}/${Math.ceil(playerIds.length / batchSize)} (${batch.length} jugadores)...`);
+            
+            await Promise.all(
+                batch.map(async (playerId) => {
+                    const gameLogs = await getPlayerAllGameLogs(playerId);
+                    playerGameLogsMap.set(playerId, gameLogs);
+                    if (gameLogs.length > 0) {
+                        console.log(`  ✓ Jugador ${playerId}: ${gameLogs.length} partidos encontrados`);
+                    } else {
+                        console.warn(`  ⚠ Jugador ${playerId}: No se encontraron partidos`);
+                    }
+                })
+            );
+            
+            // Pequeña pausa entre lotes para evitar rate limiting
+            if (i + batchSize < playerIds.length) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
 
         // Calcular puntos por usuario - usar userId como clave principal
         // Crear un mapa por userId para asegurar que cada usuario tenga su ranking
@@ -665,21 +665,11 @@ export async function calculateRankings(): Promise<TeamRanking[]> {
                 ranking!.totalPoints += weekly.points;
             });
 
-            // Log detallado para cada período
-            const purchaseDateStr = period.purchaseDate.toISOString().split('T')[0];
-            const saleDateStr = period.saleDate ? period.saleDate.toISOString().split('T')[0] : 'actualidad';
-            
+            // Log solo períodos con puntos para reducir ruido
             if (totalPeriodPoints > 0) {
-                console.log(`  ✅ Usuario ${period.userId} - ${period.playerName} (${period.playerId}):`);
-                console.log(`     - Fecha compra: ${purchaseDateStr}`);
-                console.log(`     - Fecha venta: ${saleDateStr}`);
-                console.log(`     - Puntos totales: ${totalPeriodPoints}`);
-                console.log(`     - Equipo: ${ranking.teamName}`);
-            } else {
-                console.log(`  ⚠️ Usuario ${period.userId} - ${period.playerName} (${period.playerId}): 0 puntos`);
-                console.log(`     - Fecha compra: ${purchaseDateStr}`);
-                console.log(`     - Fecha venta: ${saleDateStr}`);
-                console.log(`     - Partidos disponibles: ${gameLogs.length}`);
+                const purchaseDateStr = period.purchaseDate.toISOString().split('T')[0];
+                const saleDateStr = period.saleDate ? period.saleDate.toISOString().split('T')[0] : 'actualidad';
+                console.log(`  ✅ ${period.playerName} (${period.playerId}): ${totalPeriodPoints} puntos (${purchaseDateStr} - ${saleDateStr})`);
             }
         }
         
