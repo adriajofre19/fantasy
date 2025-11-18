@@ -40,17 +40,18 @@ export const POST: APIRoute = async ({ request, cookies, redirect, url }) => {
             }
         }
 
+        // Asegurarse de que la URL sea absoluta y completa
         const callbackUrl = `${origin}/api/auth/callback`;
 
-        // Log para debugging (solo en desarrollo)
-        if (import.meta.env.DEV) {
-            console.log("OAuth callback URL:", callbackUrl);
-        }
+        // Log para debugging
+        console.log("OAuth callback URL:", callbackUrl);
+        console.log("Origin detectado:", origin);
+        console.log("URL actual:", url.href);
 
         const { data, error } = await supabase.auth.signInWithOAuth({
             provider: provider as Provider,
             options: {
-                redirectTo: callbackUrl
+                redirectTo: callbackUrl,
             },
         });
 
