@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { calculateRankings } from "../../../lib/fantasy-ranking";
+import { getRankingsWithCache, calculateAndCacheRankings } from "../../../lib/fantasy-ranking-cache";
 import { createClient } from "@supabase/supabase-js";
 
 /**
@@ -8,7 +8,7 @@ import { createClient } from "@supabase/supabase-js";
  * Los puntos se cuentan solo cuando el jugador está fichado en el equipo
  * Muestra TODOS los usuarios autenticados, incluso si no tienen equipo
  */
-export const GET: APIRoute = async ({ request }) => {
+export const GET: APIRoute = async ({ request, url }) => {
     try {
         console.log('🔄 Iniciando cálculo de clasificación...');
         
@@ -58,9 +58,19 @@ export const GET: APIRoute = async ({ request }) => {
             console.warn('   Continuando con solo usuarios que tienen equipos.');
         }
         
-        // Calcular rankings (esto obtiene usuarios desde user_teams)
-        const rankings = await calculateRankings();
-        console.log(`✅ Clasificación calculada: ${rankings.length} equipos`);
+        // Obtener rankings usando caché (válido por 30 minutos por defecto)
+        // Si el caché está expirado o no existe, se calculará automáticamente
+        const forceRecalculate = url.searchParams.get('force') === 'true';
+        
+        let rankings;
+        if (forceRecalculate) {
+            console.log('🔄 Forzando recálculo de rankings...');
+            rankings = await calculateAndCacheRankings();
+        } else {
+            rankings = await getRankingsWithCache(30); // Caché válido por 30 minutos
+        }
+        
+        console.log(`✅ Clasificación obtenida: ${rankings.length} equipos`);
         
         // Crear un mapa de rankings por userId para facilitar la búsqueda
         const rankingsMap = new Map<string, typeof rankings[0]>();
