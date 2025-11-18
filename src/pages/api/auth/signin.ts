@@ -11,31 +11,41 @@ export const POST: APIRoute = async ({ request, cookies, redirect, url }) => {
     const validProviders = ["google", "github", "discord"];
 
     if (provider && validProviders.includes(provider)) {
-        // Detectar l'URL base (producció o desenvolupament)
-        // Prioridad: SITE_URL > VERCEL_URL > headers HTTP > url.origin
+        // Detectar la URL base (producción o desarrollo)
+        // Prioridad: SITE_URL > PUBLIC_SITE_URL > SITE (Astro) > VERCEL_URL > headers HTTP > url.origin
         let origin: string;
 
-        const siteUrl = import.meta.env.SITE_URL || import.meta.env.PUBLIC_SITE_URL;
+        const siteUrl = import.meta.env.SITE_URL ||
+            import.meta.env.PUBLIC_SITE_URL ||
+            import.meta.env.SITE;
         const vercelUrl = import.meta.env.VERCEL_URL;
 
         if (siteUrl) {
+            // Si hay SITE_URL configurada, usarla directamente
             origin = siteUrl;
         } else if (vercelUrl) {
-            // Vercel proporciona VERCEL_URL automáticamente
-            origin = `${vercelUrl}`;
+            // Vercel proporciona VERCEL_URL automáticamente (sin protocolo)
+            origin = `https://${vercelUrl}`;
         } else {
             // Intentar obtener la URL real desde headers (útil con proxies/load balancers)
             const forwardedHost = request.headers.get("x-forwarded-host");
-            const forwardedProto = request.headers.get("x-forwarded-proto") || "https";
+            const forwardedProto = request.headers.get("x-forwarded-proto") ||
+                (url.protocol === "https:" ? "https" : "http");
 
             if (forwardedHost) {
                 origin = `${forwardedProto}://${forwardedHost}`;
             } else {
+                // Fallback a url.origin
                 origin = url.origin;
             }
         }
 
         const callbackUrl = `${origin}/api/auth/callback`;
+
+        // Log para debugging (solo en desarrollo)
+        if (import.meta.env.DEV) {
+            console.log("OAuth callback URL:", callbackUrl);
+        }
 
         const { data, error } = await supabase.auth.signInWithOAuth({
             provider: provider as Provider,
@@ -71,5 +81,5 @@ export const POST: APIRoute = async ({ request, cookies, redirect, url }) => {
     cookies.set("sb-refresh-token", refresh_token, {
         path: "/",
     });
-    return redirect("/");
+    return redirect("/dashboard");
 };
