@@ -22,7 +22,7 @@ export const POST: APIRoute = async ({ request, cookies, redirect, url }) => {
             origin = siteUrl;
         } else if (vercelUrl) {
             // Vercel proporciona VERCEL_URL automáticamente
-            origin = `https://${vercelUrl}`;
+            origin = `${vercelUrl}`;
         } else {
             // Intentar obtener la URL real desde headers (útil con proxies/load balancers)
             const forwardedHost = request.headers.get("x-forwarded-host");

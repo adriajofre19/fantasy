@@ -4,6 +4,15 @@ import { getPlayers } from "../lib/rapidapi-nba";
 import { cache } from "../lib/cache";
 import PlayerStatsModal from "../components/PlayerStatsModal";
 
+// Manejar callback de OAuth si viene el código en la URL
+const { url, redirect } = Astro;
+const authCode = url.searchParams.get("code");
+
+if (authCode) {
+    // Redirigir al callback con el código
+    return redirect(`/api/auth/callback?code=${authCode}`);
+}
+
 type Player = {
 	id: number;
 	first_name: string;
